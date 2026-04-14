@@ -1,0 +1,251 @@
+@page "/"
+@rendermode InteractiveServer
+
+@inject OpenMeteo.OpenMeteoClient MeteoClient
+@inject IJSRuntime JS
+@inject IHttpClientFactory HttpClientFactory
+
+@using System.Globalization
+@using System.Text.Json
+@using OpenMeteo.Weather.Forecast.Options
+
+<PageTitle>Meteo</PageTitle>
+
+@if (errorMessage is not null)
+{
+    <div class="weather-card">
+        <div class="error-container">
+            <span class="error-icon">⚠️</span>
+            <p>@errorMessage</p>
+        </div>
+    </div>
+}
+else if (weather is null)
+{
+    <div class="weather-card loading-card">
+        <div class="loader"></div>
+        <p class="loading-text">Recupero dati meteo...</p>
+    </div>
+}
+else
+{
+    <div class="weather-card">
+        <div class="weather-hero" style="background-image: url('@GetBackgroundImage()')">
+            <div class="hero-overlay">
+                <div class="hero-top-right">
+                    <span class="weather-time">@currentTime</span>
+                    @if (!string.IsNullOrEmpty(cityName))
+                    {
+                        <span class="weather-city">@cityName</span>
+                    }
+                </div>
+                <div class="hero-bottom">
+                    <span class="weather-temp">@(weather.Current?.Temperature_2m?.ToString("0") ?? "--")°</span>
+                    <div class="weather-summary">
+                        <span class="weather-description">@weatherDescription</span>
+                        <span class="weather-feels-like">Percepita @(weather.Current?.Apparent_temperature?.ToString("0") ?? "--")°</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="weather-details">
+            <div class="detail-item">
+                <span class="detail-icon">💨</span>
+                <span class="detail-label">Vento</span>
+                <span class="detail-value">@(weather.Current?.Windspeed_10m?.ToString("0") ?? "--") km/h @GetWindDirection()</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-icon">💧</span>
+                <span class="detail-label">Umidità</span>
+                <span class="detail-value">@(weather.Current?.Relativehumidity_2m?.ToString("0") ?? "--")%</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-icon">☁️</span>
+                <span class="detail-label">Nuvole</span>
+                <span class="detail-value">@(weather.Current?.Cloudcover?.ToString("0") ?? "--")%</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-icon">🌡️</span>
+                <span class="detail-label">Pressione</span>
+                <span class="detail-value">@(weather.Current?.Pressure_msl?.ToString("0") ?? "--") hPa</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-icon">🌧️</span>
+                <span class="detail-label">Precipitazioni</span>
+                <span class="detail-value">@(weather.Current?.Precipitation?.ToString("0.0") ?? "--") mm</span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-icon">🌬️</span>
+                <span class="detail-label">Raffiche</span>
+                <span class="detail-value">@(weather.Current?.Windgusts_10m?.ToString("0") ?? "--") km/h</span>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private OpenMeteo.Weather.Forecast.ResponseModel.WeatherForecast? weather;
+    private string? errorMessage;
+    private string currentTime = "";
+    private string weatherDescription = "";
+    private string cityName = "";
+
+    private static readonly Dictionary<int, string> WeatherDescriptions = new()
+    {
+        [0] = "Cielo sereno",
+        [1] = "Prevalentemente sereno",
+        [2] = "Parzialmente nuvoloso",
+        [3] = "Coperto",
+        [45] = "Nebbia",
+        [48] = "Nebbia con brina",
+        [51] = "Pioviggine leggera",
+        [53] = "Pioviggine moderata",
+        [55] = "Pioviggine intensa",
+        [56] = "Pioviggine gelata leggera",
+        [57] = "Pioviggine gelata intensa",
+        [61] = "Pioggia leggera",
+        [63] = "Pioggia moderata",
+        [65] = "Pioggia intensa",
+        [66] = "Pioggia gelata leggera",
+        [67] = "Pioggia gelata intensa",
+        [71] = "Neve leggera",
+        [73] = "Neve moderata",
+        [75] = "Neve intensa",
+        [77] = "Granuli di neve",
+        [80] = "Rovesci leggeri",
+        [81] = "Rovesci moderati",
+        [82] = "Rovesci violenti",
+        [85] = "Rovesci di neve leggeri",
+        [86] = "Rovesci di neve intensi",
+        [95] = "Temporale",
+        [96] = "Temporale con grandine leggera",
+        [99] = "Temporale con grandine intensa"
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        try
+        {
+            var coords = await JS.InvokeAsync<double[]>("getGeolocation");
+            var latitude = (float)coords[0];
+            var longitude = (float)coords[1];
+            var timezone = await JS.InvokeAsync<string>("getBrowserTimezone");
+
+            var options = new WeatherForecastOptions
+            {
+                Latitude = latitude,
+                Longitude = longitude,
+                Temperature_Unit = TemperatureUnitType.celsius,
+                Windspeed_Unit = WindspeedUnitType.kmh,
+                Timezone = timezone,
+                Current = new CurrentOptions([
+                    CurrentOptionsParameter.temperature_2m,
+                    CurrentOptionsParameter.relativehumidity_2m,
+                    CurrentOptionsParameter.apparent_temperature,
+                    CurrentOptionsParameter.weathercode,
+                    CurrentOptionsParameter.windspeed_10m,
+                    CurrentOptionsParameter.winddirection_10m,
+                    CurrentOptionsParameter.windgusts_10m,
+                    CurrentOptionsParameter.pressure_msl,
+                    CurrentOptionsParameter.precipitation,
+                    CurrentOptionsParameter.cloudcover,
+                    CurrentOptionsParameter.is_day
+                ])
+            };
+
+            weather = await MeteoClient.QueryWeatherApiAsync(options);
+
+            cityName = await GetCityNameAsync(coords[0], coords[1]);
+
+            if (weather is null)
+            {
+                errorMessage = "Impossibile ottenere i dati meteo. Riprova più tardi.";
+                return;
+            }
+
+            var weatherCode = weather.Current?.Weathercode;
+            weatherDescription = weatherCode.HasValue && WeatherDescriptions.TryGetValue(weatherCode.Value, out var description)
+                ? description : "N/D";
+
+            var utcOffset = TimeSpan.FromSeconds(weather.UtcOffset);
+            var localNow = DateTimeOffset.UtcNow.ToOffset(utcOffset);
+            currentTime = localNow.ToString("HH:mm");
+        }
+        catch (JSException)
+        {
+            errorMessage = "Impossibile ottenere la posizione. Consenti l'accesso alla geolocalizzazione nel browser.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Errore nel recupero dei dati meteo: {ex.Message}";
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task<string> GetCityNameAsync(double latitude, double longitude)
+    {
+        try
+        {
+            using var client = HttpClientFactory.CreateClient("Nominatim");
+            var url = $"/reverse?lat={latitude.ToString(CultureInfo.InvariantCulture)}&lon={longitude.ToString(CultureInfo.InvariantCulture)}&format=json&accept-language=it";
+            var response = await client.GetFromJsonAsync<JsonElement>(url);
+
+            if (response.TryGetProperty("address", out var address))
+            {
+                if (address.TryGetProperty("city", out var city))
+                    return city.GetString() ?? "";
+                if (address.TryGetProperty("town", out var town))
+                    return town.GetString() ?? "";
+                if (address.TryGetProperty("village", out var village))
+                    return village.GetString() ?? "";
+                if (address.TryGetProperty("municipality", out var municipality))
+                    return municipality.GetString() ?? "";
+            }
+        }
+        catch
+        {
+            // Reverse geocoding is best-effort; don't fail the whole page
+        }
+
+        return "";
+    }
+
+    private string GetWindDirection()
+    {
+        var degrees = weather?.Current?.Winddirection_10m;
+        if (!degrees.HasValue)
+        {
+            return string.Empty;
+        }
+
+        var directions = new[] { "N", "NE", "E", "SE", "S", "SO", "O", "NO" };
+        var index = (int)Math.Round((double)degrees.Value / 45) % 8;
+        return directions[index];
+    }
+
+    private string GetBackgroundImage()
+    {
+        var isDay = weather?.Current?.Is_day == 1;
+        var code = weather?.Current?.Weathercode ?? 0;
+
+        return code switch
+        {
+            0 or 1 when isDay => "https://images.unsplash.com/photo-1601297183305-6df142704ea2?w=800&q=80",
+            0 or 1 => "https://images.unsplash.com/photo-1532978379173-523e16f371f2?w=800&q=80",
+            2 or 3 when isDay => "https://images.unsplash.com/photo-1534088568595-a066f410bcda?w=800&q=80",
+            2 or 3 => "https://images.unsplash.com/photo-1501752076105-7570661c5c1e?w=800&q=80",
+            45 or 48 => "https://images.unsplash.com/photo-1487621167305-5d248087c724?w=800&q=80",
+            >= 51 and <= 67 => "https://images.unsplash.com/photo-1534274988757-a28bf1a57c17?w=800&q=80",
+            >= 71 and <= 86 => "https://images.unsplash.com/photo-1491002052546-bf38f186af56?w=800&q=80",
+            >= 95 => "https://images.unsplash.com/photo-1605727216801-e27ce1d0cc28?w=800&q=80",
+            _ => "https://images.unsplash.com/photo-1601297183305-6df142704ea2?w=800&q=80"
+        };
+    }
+}
