@@ -91,6 +91,10 @@ else
     private string weatherDescription = "";
     private string cityName = "";
 
+    [Parameter]
+    [SupplyParameterFromQuery(Name = "c")]
+    public string? City { get; set; }
+
     private static readonly Dictionary<int, string> WeatherDescriptions = new()
     {
         [0] = "Cielo sereno",
@@ -132,15 +136,10 @@ else
 
         try
         {
-            var coords = await JS.InvokeAsync<double[]>("getGeolocation");
-            var latitude = (float)coords[0];
-            var longitude = (float)coords[1];
             var timezone = await JS.InvokeAsync<string>("getBrowserTimezone");
 
             var options = new WeatherForecastOptions
             {
-                Latitude = latitude,
-                Longitude = longitude,
                 Temperature_Unit = TemperatureUnitType.celsius,
                 Windspeed_Unit = WindspeedUnitType.kmh,
                 Timezone = timezone,
@@ -159,9 +158,23 @@ else
                 ])
             };
 
-            weather = await MeteoClient.QueryWeatherApiAsync(options);
+            if (!string.IsNullOrWhiteSpace(City))
+            {
+                weather = await MeteoClient.QueryWeatherApiAsync(City, options);
+                cityName = City;
+            }
+            else
+            {
+                var coords = await JS.InvokeAsync<double[]>("getGeolocation");
+                var latitude = (float)coords[0];
+                var longitude = (float)coords[1];
 
-            cityName = await GetCityNameAsync(coords[0], coords[1]);
+                options.Latitude = latitude;
+                options.Longitude = longitude;
+
+                weather = await MeteoClient.QueryWeatherApiAsync(options);
+                cityName = await GetCityNameAsync(coords[0], coords[1]);
+            }
 
             if (weather is null)
             {
